@@ -25,19 +25,25 @@ def resolve_cmd_str(cmd, distance_vector):
 	cmd = cmd.split(" ")
 
 	if cmd[0] == "add": 			# add cmd[1] in distance_vector with wheight cmd[2]
-		distance_vector[cmd[1]] = (cmd[1], int(cmd[2]), UDP_ORIG_IP)
+		try: 
+			distance_vector[cmd[1]] = (cmd[1], int(cmd[2]), UDP_ORIG_IP)
+		except ValueError:
+			print("\n > > > Escolha ruim de valores. . .\n")
 		return 1
 	elif cmd[0] == "del": 			# remove cmd[1] from distance_vector
-		del distance_vector[cmd[1]]
+		try:
+			del distance_vector[cmd[1]]
+		except KeyError:
+			print("\n > > > Conexão inexistente . . .\n")
 		return 1
 	elif cmd[0] == "trace": 		# finds route to cmd[1]
 		print("procurar rota para ", cmd[1], " ( incompleto )\n")
 		return 1
 	elif cmd[0] == "quit": 		# finds route to cmd[1]
-		print("Adeus!\n")
+		print("\nAdeus!\n")
 		return -1
 	else :
-		print("comando desconhecido!\n")
+		print("\n > > > Comando desconhecido!\n")
 		return 1
 
 
