@@ -20,6 +20,7 @@ TIME_TO_WAIT = int(args[2])
 
 ###############################################################################
 ###############################################################################
+# decides what to do based on received command
 def resolve_cmd_str(cmd, distance_vector):
 	
 	cmd = cmd.split(" ")
@@ -38,14 +39,64 @@ def resolve_cmd_str(cmd, distance_vector):
 		return 1
 	elif cmd[0] == "trace": 		# finds route to cmd[1]
 		print("procurar rota para ", cmd[1], " ( incompleto )\n")
+		start_trace(cmd[1])
 		return 1
 	elif cmd[0] == "quit": 		# finds route to cmd[1]
-		print("\nAdeus!\n")
+		print("\n > > > Adeus!\n")
 		return -1
 	else :
 		print("\n > > > Comando desconhecido!\n")
 		return 1
 
+
+###############################################################################
+###############################################################################
+# decides what to do for received JSON. Returns JSON to send (if needed)
+def resolve_rcv_json(data):
+	messageJ = json.loads(data)
+
+	if messageJ['type'] == "trace" :
+		messageJ['hops'].push(UDP_ORIG_IP)
+		if messageJ['destination'] == UDP_ORIG_IP:
+			print("enviar messageJ de volta ao source como payload (~incompleto)")
+			return trace_done(messageJ)
+		else:
+			print("enviar json pelo caminho mais curto até destination (~incompleto)")
+			return continue_trace(messageJ)
+	elif messageJ['type'] == "data" :
+		if messageJ['destination'] == UDP_ORIG_IP:
+			print("printar payload (incompleto)")
+		else:
+			print("enviar json pelo caminho mais curto até destination (incompleto)") 
+	elif messageJ['type'] == "update" :
+		print("atualizar distance_vector (incompleto)")
+	
+
+###############################################################################
+###############################################################################
+# creates JSON structure of type TYPEJ to destination DESTINATIONJ 
+def build_json(typeJ,destinationJ,optJ=''):
+	new_json = {'type' : typeJ, 'source': UDP_ORIG_IP, 'destination': destinationJ}
+	if typeJ == "data":
+		new_json['payload'] = optJ
+	elif typeJ == "trace":
+		new_json['hops'] = [UDP_ORIG_IP]
+	elif typeJ == "update":
+		new_json['distances'] = optJ
+
+	return new_json
+
+
+###############################################################################
+###############################################################################
+def start_trace(target_IP):
+	return build_json("trace", target_IP)
+
+###############################################################################
+###############################################################################
+# builds JSON to be sent back to trace's 
+def trace_done(traceJ):
+	return build_json("data",traceJ['source'], json.dumps(traceJ))
 
 ###############################################################################
 ###############################################################################
@@ -70,7 +121,12 @@ if __name__ == "__main__":
 
 	while True:
 		print("Atual vetor de distancias:\n", json.dumps(distance_vector))
-		
+
+		#data, addr = udp_sock.recvfrom(1024) # buffer size is 1024 bytes
+
+		#resolve_rcv_json(data)
+
+
 		print("\n$ ", end='')
 		if resolve_cmd_str(input(), distance_vector) < 0:
 			break  
