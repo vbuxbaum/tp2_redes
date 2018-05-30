@@ -55,7 +55,7 @@ def resolve_cmd_str(cmd):
 		return 1
 	elif cmd[0] == "trace": 		# finds route to cmd[1]
 		print("procurar rota para ", cmd[1], " ( incompleto )\n")
-		start_trace(cmd[1])
+		send_via_udp(start_trace(cmd[1]))
 		return 1
 	elif cmd[0] == "quit": 		# stop the program
 		print("\n > > > Adeus!\n")
@@ -81,18 +81,19 @@ def resolve_rcv_json(data):
 			return messageJ
 	elif messageJ['type'] == "data" :
 		if messageJ['destination'] == UDP_ORIG_IP:
-			print("printar payload (incompleto)")
+			print(messageJ['payload'])
+			return ''
 		else:
-			print("enviar json pelo caminho mais curto até destination (incompleto)") 
+			return messageJ
 	elif messageJ['type'] == "update" :
 		print("disparar thread")
-		update_distance_vector(messageJ['distances'])
+		update_distance_vector(messageJ['distances'], messageJ['source'])
 	
 
 ###############################################################################
 ###############################################################################
 # creates JSON structure of type TYPEJ to destination DESTINATIONJ 
-def build_json(typeJ,destinationJ,optJ=''):
+def build_dict(typeJ,destinationJ,optJ=''):
 	new_json = {'type' : typeJ, 'source': UDP_ORIG_IP, 'destination': destinationJ}
 	if typeJ == "data":
 		new_json['payload'] = optJ
@@ -101,24 +102,31 @@ def build_json(typeJ,destinationJ,optJ=''):
 	elif typeJ == "update":
 		new_json['distances'] = optJ
 
-	return json.dumps(new_json)
+	return new_json
 
 
 ###############################################################################
 ###############################################################################
 def start_trace(target_IP):
-	return build_json("trace", target_IP)
+	return build_dict("trace", target_IP)
 
 
 ###############################################################################
 ###############################################################################
 # builds JSON to be sent back to trace's 
 def trace_done(traceJ):
-	return build_json("data",traceJ['source'], json.dumps(traceJ))
+	return build_dict("data",traceJ['source'], json.dumps(traceJ))
 
 ###############################################################################
 ###############################################################################
+# handler to send dictionarys via UDP on JSON format
+def send_via_udp(msg_to_send):
+	global udp_sock, distance_vector
+	neighbor = distance_vector[msg_to_send['destination']][0]
+	udp_sock.sendto(bytes(json.dumps(msg_to_send), "utf-8"), (neighbor,UDP_PORT))
 
+###############################################################################
+###############################################################################
 # Send an update Json message to each neighbor
 def send_update_message():
 	global distance_vector
@@ -127,14 +135,14 @@ def send_update_message():
 		new_distance_vector = dict(distance_vector) 
 		del new_distance_vector[neighbor] 
 		#del new_distance_vector[UDP_ORIG_IP]
-		udp_sock.sendto(bytes(build_json("update", str(neighbor), json.dumps(new_distance_vector)), "utf-8"), (neighbor,UDP_PORT))
+		udp_sock.sendto(bytes(json.dumps(build_dict("update", str(neighbor), json.dumps(new_distance_vector))), "utf-8"), (neighbor,UDP_PORT))
 
 ###############################################################################
 ###############################################################################
-def update_distance_vector(rcv_distance_vector):
+def update_distance_vector(rcv_distance_vector, sender):
 	global distance_vector
 
-	sender = rcv_distance_vector.keys()[0]
+	#sender = rcv_distance_vector.keys()[0]
 	for rcv_neighbor in rcv_distance_vector:
 		if(distance_vector.has_key(rcv_neighbor)):
 			# Updates distance of neighbors that sender and receiver can reach directly
@@ -162,11 +170,12 @@ if __name__ == "__main__":
 	if len(args) == 4:
 		file = open(args[3], "r") 
 		for line in file:
-			resolve_cmd_str(line, distance_vector)
+			resolve_cmd_str(line)
 		file.close()
 
 	#thread = threading.Thread(target = should_update_vector, args = (time.time(),))
 	#thread.start()
+
 	while True:
 		print("Atual vetor de distancias:\n", json.dumps(distance_vector))
 
@@ -178,7 +187,9 @@ if __name__ == "__main__":
 		#message, addr = udp_sock.recvfrom(1024) #message is a string representation of JSON message
 		#if(message):
 		try:
-			resolve_rcv_json(message)
+			msg_to_send = resolve_rcv_json(message)
+			if msg_to_send != '' :
+				send_via_udp(msg_to_send)
 		except Exception:
 			pass
 			
