@@ -12,15 +12,19 @@ import threading
 ###############################################################################
 ###############################################################################
 #### GLOBAL
+
 args = list(sys.argv)
 UDP_ORIG_IP = args[1]
 UDP_PORT = 55151
 TIME_TO_WAIT = int(args[2])
-start = time.clock()
+start = time.time()
+
+###############################################################################
 # dictionary { DESTINATION_IP : (<whom_to_send>, <weight>) }
 # initialized with link to self
 distance_vector = { UDP_ORIG_IP : (UDP_ORIG_IP, 0)}
 
+###############################################################################
 #UDP Socket
 udp_sock = socket.socket(socket.AF_INET, 	# Internet
 	                     socket.SOCK_DGRAM) 	# UDP
@@ -28,18 +32,18 @@ udp_sock = socket.socket(socket.AF_INET, 	# Internet
 # bind this port on local IP to UDP socket
 udp_sock.bind((UDP_ORIG_IP, UDP_PORT))
 
-
-
 ###############################################################################
 ###############################################################################
+
 # decides what to do based on received command
-def resolve_cmd_str(cmd, distance_vector):
-	
+def resolve_cmd_str(cmd):
+	global distance_vector
+
 	cmd = cmd.split(" ")
 
 	if cmd[0] == "add": 			# add cmd[1] in distance_vector with wheight cmd[2]
 		try: 
-			distance_vector[cmd[1]] = (cmd[1], int(cmd[2]))
+			distance_vector[cmd[1]] = (UDP_ORIG_IP, int(cmd[2]))
 		except ValueError:
 			print("\n > > > Escolha ruim de valores . . .\n")
 		return 1
@@ -53,7 +57,7 @@ def resolve_cmd_str(cmd, distance_vector):
 		print("procurar rota para ", cmd[1], " ( incompleto )\n")
 		start_trace(cmd[1])
 		return 1
-	elif cmd[0] == "quit": 		# finds route to cmd[1]
+	elif cmd[0] == "quit": 		# stop the program
 		print("\n > > > Adeus!\n")
 		return -1
 	else :
@@ -74,7 +78,7 @@ def resolve_rcv_json(data):
 			return trace_done(messageJ)
 		else:
 			print("enviar json pelo caminho mais curto até destination (~incompleto)")
-			return continue_trace(messageJ)
+			return messageJ
 	elif messageJ['type'] == "data" :
 		if messageJ['destination'] == UDP_ORIG_IP:
 			print("printar payload (incompleto)")
@@ -97,7 +101,7 @@ def build_json(typeJ,destinationJ,optJ=''):
 	elif typeJ == "update":
 		new_json['distances'] = optJ
 
-	return new_json
+	return json.dumps(new_json)
 
 
 ###############################################################################
@@ -105,10 +109,6 @@ def build_json(typeJ,destinationJ,optJ=''):
 def start_trace(target_IP):
 	return build_json("trace", target_IP)
 
-###############################################################################
-###############################################################################
-def continue_trace():
-	return 1
 
 ###############################################################################
 ###############################################################################
@@ -118,10 +118,46 @@ def trace_done(traceJ):
 
 ###############################################################################
 ###############################################################################
+
+# Send an update Json message to each neighbor
+def send_update_message():
+	global distance_vector
+	for neighbor in distance_vector: # get all neighbors
+		# distance_vector of A: [A, B, C]. When A sends update message to B, new_distance_vector of A:[C]
+		new_distance_vector = dict(distance_vector) 
+		del new_distance_vector[neighbor] 
+		#del new_distance_vector[UDP_ORIG_IP]
+		udp_sock.sendto(bytes(build_json("update", str(neighbor), json.dumps(new_distance_vector)), "utf-8"), (neighbor,UDP_PORT))
+
+###############################################################################
+###############################################################################
+def update_distance_vector(rcv_distance_vector):
+	global distance_vector
+
+	sender = rcv_distance_vector.keys()[0]
+	for rcv_neighbor in rcv_distance_vector:
+		if(distance_vector.has_key(rcv_neighbor)):
+			# Updates distance of neighbors that sender and receiver can reach directly
+			if distance_vector[sender][1] + rcv_distance_vector[rcv_neighbor][1] < distance_vector[rcv_neighbor][1]: 
+				distance_vector[rcv_neighbor] = (sender, rcv_distance_vector[rcv_neighbor][1] + distance_vector[sender][1]) 
+		else:
+			#Updates distance of neighbors that receiver can't reach directly
+			distance_vector[rcv_neighbor] = (sender, rcv_distance_vector[rcv_neighbor][1] + distance_vector[sender][1])
+
+###############################################################################
+###############################################################################
+def should_update_vector(rcv_time):
+	global start
+	#while (True):
+	if(rcv_time - start > TIME_TO_WAIT): 
+		#print(rcv_time - start)		
+		send_update_message()
+		start = time.time()
+
+###############################################################################
+###############################################################################
 if __name__ == "__main__":
 
-	global start
-	global distance_vector
 	# execute commands from input file
 	if len(args) == 4:
 		file = open(args[3], "r") 
@@ -129,45 +165,24 @@ if __name__ == "__main__":
 			resolve_cmd_str(line, distance_vector)
 		file.close()
 
+	#thread = threading.Thread(target = should_update_vector, args = (time.time(),))
+	#thread.start()
 	while True:
 		print("Atual vetor de distancias:\n", json.dumps(distance_vector))
 
 		#data, addr = udp_sock.recvfrom(1024) # buffer size is 1024 bytes
 
 		#resolve_rcv_json(data)
-
-		if(should_update_vector(time.clock())):
-			send_update_message(distance_vector)
-			start = time.clock()
-
-		message, addr = server_socket.recvfrom(1024)
-		if(message):
-			try:
-				resolve_rcv_json(message)
-			except Exception:
-				pass
-		print("\n$ ", end='')
-		if resolve_cmd_str(input(), distance_vector) < 0:
-			break  
-
-def send_update_message(distance_vector):
-	for neighbor in distance_vector: # get all neighbors
-		if (neighbor != UDP_ORIG_IP): # Won't send message to itself (the first key in distance_vector is the node itself)
-			sock.sendto(build_json("update",str(neighbor),json.dumps(distance_vector)), (neighbor,UDP_PORT))
-
-def update_distance_vector(rcv_distance_vector):
-	global distance_vector
-	for rcv_neighbor in rcv_distance_vector:
+	
+		should_update_vector(time.time())
+		#message, addr = udp_sock.recvfrom(1024) #message is a string representation of JSON message
+		#if(message):
 		try:
-			#Updates distance of neighbors that sender and receiver can reach directly
-			if distance_vector[rcv_neighbor][1] + rcv_distance_vector[rcv_neighbor][1] < distance_vector[rcv_neighbor][1]: #if peso(A) + peso(B) < peso(A)
-				distance_vector[rcv_neighbor][1] = rcv_distance_vector[rcv_neighbor][1] + distance_vector[rcv_neighbor][1] # peso(A) = peso(B) + peso(A)
+			resolve_rcv_json(message)
 		except Exception:
-			#Updates distance of neighbors that receiver can't reach directly
-			distance_vector[rcv_neighbor][1] = rcv_distance_vector[rcv_neighbor][1] + distance_vector[rcv_neighbor][1]
-
-
-def should_update_vector(time):
-	if(time - start > TIME_TO_WAIT): 
-		return True
-	return False
+			pass
+			
+		print("\n$ ", end='')
+		if resolve_cmd_str(input()) < 0:
+			#thread.join()
+			break  
