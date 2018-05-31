@@ -18,6 +18,7 @@ UDP_ORIG_IP = args[1]
 UDP_PORT = 55151
 TIME_TO_WAIT = int(args[2])
 start = time.time()
+thread_kill = False
 
 ###############################################################################
 # dictionary { DESTINATION_IP : (<whom_to_send>, <weight>) }
@@ -28,7 +29,7 @@ distance_vector = { UDP_ORIG_IP : (UDP_ORIG_IP, 0)}
 #UDP Socket
 udp_sock = socket.socket(socket.AF_INET, 	# Internet
 	                     socket.SOCK_DGRAM) 	# UDP
-
+udp_sock.settimeout(2)
 # bind this port on local IP to UDP socket
 udp_sock.bind((UDP_ORIG_IP, UDP_PORT))
 
@@ -86,7 +87,7 @@ def resolve_rcv_json(data):
 		else:
 			return messageJ
 	elif messageJ['type'] == "update" :
-		print("disparar thread")
+		#print("disparar thread")
 		update_distance_vector(messageJ['distances'], messageJ['source'])
 	
 
@@ -123,7 +124,7 @@ def trace_done(traceJ):
 def send_via_udp(msg_to_send):
 	global udp_sock, distance_vector
 	neighbor = distance_vector[msg_to_send['destination']][0]
-	udp_sock.sendto(bytes(json.dumps(msg_to_send), "utf-8"), (neighbor,UDP_PORT))
+	udp_sock.sendto(str.encode(json.dumps(msg_to_send)), (neighbor,UDP_PORT))
 
 ###############################################################################
 ###############################################################################
@@ -135,7 +136,8 @@ def send_update_message():
 		new_distance_vector = dict(distance_vector) 
 		del new_distance_vector[neighbor] 
 		#del new_distance_vector[UDP_ORIG_IP]
-		udp_sock.sendto(bytes(json.dumps(build_dict("update", str(neighbor), json.dumps(new_distance_vector))), "utf-8"), (neighbor,UDP_PORT))
+		#print("chega aqui")
+		udp_sock.sendto(str.encode(json.dumps(build_dict("update", str(neighbor), json.dumps(new_distance_vector)))), (neighbor,UDP_PORT))
 
 ###############################################################################
 ###############################################################################
@@ -154,17 +156,35 @@ def update_distance_vector(rcv_distance_vector, sender):
 
 ###############################################################################
 ###############################################################################
-def should_update_vector(rcv_time):
+def should_update_vector():
 	global start
-	#while (True):
-	if(rcv_time - start > TIME_TO_WAIT): 
-		#print(rcv_time - start)		
-		send_update_message()
-		start = time.time()
+	while (True):
+		if(thread_kill):
+			break
+		if(time.time() - start > TIME_TO_WAIT): 
+			#print(time.time() - start)		
+			send_update_message()
+			start = time.time()
+	#print("termina")
 
+def receive_message():
+	while (True):
+		if(thread_kill):
+			break
+		try:
+			message, addr = udp_sock.recvfrom(1024) #message is a string representation of JSON message
+			message = message.decode()
+			#print(message)
+			if(message):
+				msg_to_send = resolve_rcv_json(message)
+				if msg_to_send != '' :
+					send_via_udp(msg_to_send)
+		except Exception:
+			pass
 ###############################################################################
 ###############################################################################
 if __name__ == "__main__":
+	global thread_kill
 
 	# execute commands from input file
 	if len(args) == 4:
@@ -173,8 +193,10 @@ if __name__ == "__main__":
 			resolve_cmd_str(line)
 		file.close()
 
-	#thread = threading.Thread(target = should_update_vector, args = (time.time(),))
-	#thread.start()
+	thread_update = threading.Thread(target = should_update_vector, args = ())
+	thread_listen = threading.Thread(target = receive_message, args = ())
+	thread_listen.start()
+	thread_update.start()
 
 	while True:
 		print("Atual vetor de distancias:\n", json.dumps(distance_vector))
@@ -183,17 +205,14 @@ if __name__ == "__main__":
 
 		#resolve_rcv_json(data)
 	
-		should_update_vector(time.time())
-		#message, addr = udp_sock.recvfrom(1024) #message is a string representation of JSON message
-		#if(message):
-		try:
-			msg_to_send = resolve_rcv_json(message)
-			if msg_to_send != '' :
-				send_via_udp(msg_to_send)
-		except Exception:
-			pass
+		#should_update_vector(time.time())
+		
 			
 		print("\n$ ", end='')
 		if resolve_cmd_str(input()) < 0:
-			#thread.join()
+			#thread_listen.join()
+			#thread_update.join()
+			thread_kill = True
 			break  
+	thread_listen.join()
+	thread_update.join()
