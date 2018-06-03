@@ -24,7 +24,7 @@ thread_kill = False
 ###############################################################################
 # dictionary { DESTINATION_IP : (<whom_to_send>, <weight>) }
 # initialized with link to self
-distance_vector = { UDP_ORIG_IP : (UDP_ORIG_IP, 0)}
+distance_vector = { UDP_ORIG_IP : [(UDP_ORIG_IP, 0)]}
 
 ###############################################################################
 #UDP Socket
@@ -45,7 +45,7 @@ def resolve_cmd_str(cmd):
 
 	if cmd[0] == "add": 			# add cmd[1] in distance_vector with wheight cmd[2]
 		try: 
-			distance_vector[cmd[1]] = (cmd[1], int(cmd[2]))
+			distance_vector[cmd[1]] = [(cmd[1], int(cmd[2]))]
 		except ValueError:
 			print("\n > > > Escolha ruim de valores . . .\n")
 		return 1
@@ -57,7 +57,10 @@ def resolve_cmd_str(cmd):
 		return 1
 	elif cmd[0] == "trace": 		# finds route to cmd[1]
 		# print("procurar rota para ", cmd[1], " ( incompleto )\n")
-		send_via_udp(start_trace(cmd[1]))
+		try:
+			send_via_udp(start_trace(cmd[1]))
+		except Exception as e:
+			print("\n > > > Não foi possível calcular rota . . .\n")
 		return 1
 	elif cmd[0] == "quit": 		# stop the program
 		print("\n > > > Adeus! Encerrando threads . . .\n")
@@ -93,10 +96,22 @@ def resolve_rcv_json(data):
 			return messageJ
 	elif messageJ['type'] == "update" :
 		# print("rcv UPDATE")
-		update_distance_vector(messageJ['distances'], messageJ['source'])
+		update_distance_vector(messageJ['distances'], messageJ['source'])		 
 	else:
 		print("MSG MAL FORMATADA")
 	
+###############################################################################
+###############################################################################
+# Receives an distance vector and a key. LRU tuple has higher priority, coming
+# at index 0. The list of tuples is still in ascending order by weight.
+def sort_distance_vector(distance_vector,key):
+	routes = distance_vector[key] #list of tuples
+	index = 0
+	weight = routes[0][1]
+	while (index < len(routes)) and (weight == routes[index][1]):
+		index += 1
+	distance_vector[key].insert(index-1, routes.pop(0))
+
 
 ###############################################################################
 ###############################################################################
@@ -159,12 +174,14 @@ def update_distance_vector(rcv_distance_vector, sender):
 		if(rcv_neighbor in distance_vector):
 			# Updates distance of neighbors that sender and receiver can reach directly
 			#print ("update ", rcv_neighbor)
-			if distance_vector[sender][1] + int(rcv_distance_vector[rcv_neighbor][1]) < distance_vector[rcv_neighbor][1]: 
-				distance_vector[rcv_neighbor] = (sender, int(rcv_distance_vector[rcv_neighbor][1]) + distance_vector[sender][1]) 
+			if distance_vector[sender][0][1] + int(rcv_distance_vector[rcv_neighbor][0][1]) < distance_vector[rcv_neighbor][0][1]: 
+				#distance_vector[rcv_neighbor] = (sender, int(rcv_distance_vector[rcv_neighbor][1]) + distance_vector[sender][1])
+				distance_vector[rcv_neighbor].insert(0,(sender, int(rcv_distance_vector[rcv_neighbor][0][1]) + distance_vector[sender][0][1]))
+
 		else:
 			#Updates distance of neighbors that receiver can't reach directly
 			#print ("add ", rcv_neighbor)
-			distance_vector[rcv_neighbor] = (sender, int(rcv_distance_vector[rcv_neighbor][1]) + distance_vector[sender][1])
+			distance_vector[rcv_neighbor].insert(0,(sender, int(rcv_distance_vector[rcv_neighbor][0][1]) + distance_vector[sender][0][1]))
 
 ###############################################################################
 ###############################################################################
@@ -199,6 +216,7 @@ def receive_message():
 ###############################################################################
 if __name__ == "__main__":
 	global thread_kill
+	min_distance_vector = {}
 
 	# execute commands from input file
 	if len(args) == 4:
@@ -213,7 +231,9 @@ if __name__ == "__main__":
 	thread_update.start()
 
 	while True:
-		print("Atual vetor de distancias:\n", json.dumps(distance_vector))
+		for key in distance_vector:
+			min_distance_vector[key] = distance_vector[key][0]
+		print("Atual vetor de distancias:\n", json.dumps(min_distance_vector))
 
 		#data, addr = udp_sock.recvfrom(1024) # buffer size is 1024 bytes
 
