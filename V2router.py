@@ -9,6 +9,7 @@ import struct
 import codecs
 import threading
 
+#  list index out of bound 250 ~
 #./router.py <ADDR> <PERIOD> [STARTUP]
 ###############################################################################
 ###############################################################################
@@ -24,7 +25,7 @@ thread_kill = False
 ###############################################################################
 # dictionary { DESTINATION_IP : [ [<whom_to_send>, <weight>, <age>] , [ ... ] ] }
 # initialized with link to self
-distance_vector = { UDP_ORIG_IP : [ [UDP_ORIG_IP, 0, 0] ]}
+distance_vector = { UDP_ORIG_IP : [ [UDP_ORIG_IP, 0, -1] ]}
 
 ###############################################################################
 #UDP Socket
@@ -33,6 +34,9 @@ udp_sock = socket.socket(socket.AF_INET, 	# Internet
 udp_sock.settimeout(2)
 # bind this port on local IP to UDP socket
 udp_sock.bind((UDP_ORIG_IP, UDP_PORT))
+# Global lock
+lock = threading.RLock()
+
 
 
 ###############################################################################
@@ -46,9 +50,9 @@ def resolve_cmd_str(cmd):
 	if cmd[0] == "add": 			# add cmd[1] in distance_vector with wheight cmd[2]
 		try: 
 			if(cmd[1] in distance_vector):
-				distance_vector[cmd[1]].insert(0, [cmd[1], int(cmd[2]), 0] )
+				distance_vector[cmd[1]].insert(0, [cmd[1], int(cmd[2]), -1] )
 			else:
-				distance_vector[cmd[1]] = [ [cmd[1], int(cmd[2]), 0] ]
+				distance_vector[cmd[1]] = [ [cmd[1], int(cmd[2]), -1] ]
 		except ValueError:
 			print("\n > > > Escolha ruim de valores . . .\n")
 		return 1
@@ -56,7 +60,7 @@ def resolve_cmd_str(cmd):
 		try:
 			del_connection(cmd[1])
 		except KeyError:
-			print("\n > > > Conexão inexistente . . .\n")
+			print("\n > > > ConexÃ£o inexistente . . .\n")
 		return 1
 	elif cmd[0] == "trace": 		# finds route to cmd[1]
 		# print("procurar rota para ", cmd[1], " ( incompleto )\n")
@@ -64,7 +68,7 @@ def resolve_cmd_str(cmd):
 			#print(start_trace(cmd[1]))
 			send_via_udp(start_trace(cmd[1]))
 		except Exception as e:
-			print("\n > > > Não foi possível calcular rota . . .\n")
+			print("\n > > > NÃ£o foi possÃ­vel calcular rota . . .\n")
 		return 1
 	elif cmd[0] == "quit": 		# stop the program
 		print("\n > > > Adeus! Encerrando threads . . .\n")
@@ -78,7 +82,7 @@ def resolve_cmd_str(cmd):
 ###############################################################################
 # decides what to do for received JSON. Returns JSON to send (if needed)
 def resolve_rcv_json(data):
-	# print("assfgfdhjljçk")
+	# print("assfgfdhjljÃ§k")
 	messageJ = json.loads(data)
 	if messageJ['type'] == "trace" :
 		# print("trace received from ", messageJ['source'], "to", messageJ['destination'])
@@ -89,7 +93,7 @@ def resolve_rcv_json(data):
 			# print("enviar messageJ de volta ao source como payload (~incompleto)")
 			return trace_done(messageJ)
 		else:
-			# print("enviar json pelo caminho mais curto até destination (~incompleto)")
+			# print("enviar json pelo caminho mais curto atÃ© destination (~incompleto)")
 			return messageJ
 	elif messageJ['type'] == "data" :
 		# print("rcv DATA")
@@ -100,7 +104,8 @@ def resolve_rcv_json(data):
 			return messageJ
 	elif messageJ['type'] == "update" :
 		#print("rcv UPDATE")
-		update_distance_vector(messageJ['distances'], messageJ['source'])	
+		with lock:
+			update_distance_vector(messageJ['distances'], messageJ['source'])	
 	else:
 		print("MSG MAL FORMATADA")
 
@@ -144,8 +149,7 @@ def get_mininum_dist_vector():
 	new_distance_vector = {}
 	print("> ", end='')
 	for key in distance_vector: # get all neighbours
-		print(distance_vector[key])
-		new_distance_vector[key] = distance_vector[key][0][0:1]
+		new_distance_vector[key] = distance_vector[key][0][0:2]
 	return new_distance_vector
 
 
@@ -203,7 +207,7 @@ def send_update_message():
 			new_distance_vector = {i:new_distance_vector[i] for i in new_distance_vector if new_distance_vector[i][0] != key}
 			#del new_distance_vector[UDP_ORIG_IP]
 			#print("chega aqui")
-
+			#	print("new_distance_vector",new_distance_vector)
 			udp_sock.sendto(str.encode(json.dumps(build_dict("update", str(key), json.dumps(new_distance_vector)))), (key,UDP_PORT))
 
 
@@ -216,11 +220,15 @@ def update_distance_vector(rcv_distance_vector, sender):
 	for rcv_neighbour in rcv_distance_vector:
 		if(rcv_neighbour in distance_vector):
 			#print(rcv_neighbour, "tem")
-			if (distance_vector[sender][0][1] + int(rcv_distance_vector[rcv_neighbour][1]) <= distance_vector[rcv_neighbour][0][1]): 
+			if (distance_vector[sender][0][1] + int(rcv_distance_vector[rcv_neighbour][1]) < distance_vector[rcv_neighbour][0][1]):
 				distance_vector[rcv_neighbour].insert(0, [sender, int(rcv_distance_vector[rcv_neighbour][1]) + distance_vector[sender][0][1], 0] )
+			elif (distance_vector[sender][0][1] + int(rcv_distance_vector[rcv_neighbour][1]) == distance_vector[rcv_neighbour][0][1]):
+				distance_vector[rcv_neighbour] = [ [sender, int(rcv_distance_vector[rcv_neighbour][1]) + distance_vector[sender][0][1] , 0] ]
+
 		else:
 			#print(rcv_neighbour, "nao tem")
 			distance_vector[rcv_neighbour] = [ [sender, int(rcv_distance_vector[rcv_neighbour][1]) + distance_vector[sender][0][1] , 0] ]
+		#print("rcv_neighbour", rcv_neighbour,distance_vector[rcv_neighbour]) 
 
 
 ###############################################################################
@@ -230,7 +238,7 @@ def age_routes():
 	for key in distance_vector:
 		# age every route
 		for route in distance_vector[key]:
-			if route[1] != 0:
+			if route[2] != -1:
 				route[2] += 1
 		# update feasible paths to only those that have age <= 4
 		distance_vector[key] = [x for x in distance_vector[key] if x[2] <= 4]
@@ -245,11 +253,11 @@ def should_update_vector():
 		if(thread_kill):
 			break
 		if(time.time() - start >= TIME_TO_WAIT): 
-			#print(time.time() - start)	
-			send_update_message()
-			age_routes()	
-			
-			start = time.time()
+			with lock:
+				send_update_message()
+				#print("eieieie")	
+				age_routes()			
+				start = time.time()
 	#print("termina")
 
 
@@ -302,10 +310,8 @@ if __name__ == "__main__":
 			
 		print("\n$ ", end='')
 		if resolve_cmd_str(input()) < 0:
-			#thread_listen.join()
-			#thread_update.join()
 			thread_kill = True
-			break  
+			break
 
 	thread_listen.join()
 	thread_update.join()
