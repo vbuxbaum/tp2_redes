@@ -26,6 +26,7 @@ thread_kill = False
 # dictionary { DESTINATION_IP : [ [<whom_to_send>, <weight>, <age>] , [ ... ] ] }
 # initialized with link to self
 distance_vector = { UDP_ORIG_IP : [ [UDP_ORIG_IP, 0, -1] ]}
+linked = [ UDP_ORIG_IP ]
 
 ###############################################################################
 #UDP Socket
@@ -43,7 +44,7 @@ lock = threading.RLock()
 ###############################################################################
 # decides what to do based on received command
 def resolve_cmd_str(cmd):
-	global distance_vector
+	global distance_vector, linked
 
 	cmd = cmd.split(" ")
 
@@ -53,12 +54,17 @@ def resolve_cmd_str(cmd):
 				distance_vector[cmd[1]].insert(0, [cmd[1], int(cmd[2]), -1] )
 			else:
 				distance_vector[cmd[1]] = [ [cmd[1], int(cmd[2]), -1] ]
+
+			linked.append(cmd[1])
 		except ValueError:
 			print("\n > > > Escolha ruim de valores . . .\n")
 		return 1
 	elif cmd[0] == "del": 			# remove cmd[1] from distance_vector
 		try:
+			lock.acquire()
+			linked.remove(cmd[1])
 			del_connection(cmd[1])
+			lock.release()
 		except KeyError:
 			print("\n > > > ConexÃ£o inexistente . . .\n")
 		return 1
@@ -104,8 +110,9 @@ def resolve_rcv_json(data):
 			return messageJ
 	elif messageJ['type'] == "update" :
 		#print("rcv UPDATE")
-		with lock:
-			update_distance_vector(messageJ['distances'], messageJ['source'])	
+		lock.acquire()
+		update_distance_vector(messageJ['distances'], messageJ['source'])
+		lock.release()	
 	else:
 		print("MSG MAL FORMATADA")
 
@@ -147,7 +154,6 @@ def sort_distance_vector(key):
 def get_mininum_dist_vector():
 	global distance_vector
 	new_distance_vector = {}
-	print("> ", end='')
 	for key in distance_vector: # get all neighbours
 		new_distance_vector[key] = distance_vector[key][0][0:2]
 	return new_distance_vector
@@ -187,7 +193,12 @@ def trace_done(traceJ):
 # handler to send dictionarys via UDP on JSON format
 def send_via_udp(msg_to_send):
 	global udp_sock, distance_vector
-	neighbour = distance_vector[msg_to_send['destination']][0][0]
+	if msg_to_send['destination'] in distance_vector:
+		neighbour = distance_vector[msg_to_send['destination']][0][0]
+	else:
+		msg_to_send = build_dict("data", msg_to_send['source'], "ERRO: destino" + msg_to_send['destination'] + "nao encontrado no roteador" + UDP_ORIG_IP + "!!!")
+		neighbour = distance_vector[msg_to_send['source']][0][0]
+
 	#print(neighbour, msg_to_send['source'], msg_to_send['destination'])
 	sort_distance_vector(neighbour)
 	udp_sock.sendto(str.encode(json.dumps(msg_to_send)), (neighbour,UDP_PORT))
@@ -197,17 +208,19 @@ def send_via_udp(msg_to_send):
 ###############################################################################
 # Send an update Json message to each neighbour 
 def send_update_message():
-	global distance_vector
+	global linked, distance_vector
+	print (distance_vector)
 	
-	for key in distance_vector:	
+	for key in linked:	
 		# distance_vector of A: [A, B, C]. When A sends update message to B, new_distance_vector of A:[C]
 		if key != UDP_ORIG_IP: 
 			new_distance_vector = get_mininum_dist_vector() 
 			del new_distance_vector[key] 
-			new_distance_vector = {i:new_distance_vector[i] for i in new_distance_vector if new_distance_vector[i][0] != key}
+			#new_distance_vector = {i:new_distance_vector[i] for i in new_distance_vector if }
 			#del new_distance_vector[UDP_ORIG_IP]
 			#print("chega aqui")
-			#	print("new_distance_vector",new_distance_vector)
+			#print("new_distance_vector",new_distance_vector)
+			
 			udp_sock.sendto(str.encode(json.dumps(build_dict("update", str(key), json.dumps(new_distance_vector)))), (key,UDP_PORT))
 
 
@@ -215,26 +228,37 @@ def send_update_message():
 ###############################################################################
 def update_distance_vector(rcv_distance_vector, sender):
 	global distance_vector
-	rcv_distance_vector = ast.literal_eval(rcv_distance_vector)
-	#print(rcv_distance_vector)
-	for rcv_neighbour in rcv_distance_vector:
-		if(rcv_neighbour in distance_vector):
-			#print(rcv_neighbour, "tem")
-			if (distance_vector[sender][0][1] + int(rcv_distance_vector[rcv_neighbour][1]) < distance_vector[rcv_neighbour][0][1]):
-				distance_vector[rcv_neighbour].insert(0, [sender, int(rcv_distance_vector[rcv_neighbour][1]) + distance_vector[sender][0][1], 0] )
-			elif (distance_vector[sender][0][1] + int(rcv_distance_vector[rcv_neighbour][1]) == distance_vector[rcv_neighbour][0][1]):
-				distance_vector[rcv_neighbour] = [ [sender, int(rcv_distance_vector[rcv_neighbour][1]) + distance_vector[sender][0][1] , 0] ]
 
+	rcv_distance_vector = ast.literal_eval(rcv_distance_vector)
+
+	sender_weight = distance_vector[sender][0][1]
+
+	for rcv_neighbour in rcv_distance_vector:
+
+		rcv_weight = int(rcv_distance_vector[rcv_neighbour][1])
+
+		if(rcv_neighbour in distance_vector ):
+			# caso já haja rotas para o destino: CONFERE SE NOVA ROTA É MELHOR
+			curr_dest_weight =  distance_vector[rcv_neighbour][0][1]
+			distance_vector[rcv_neighbour] = [x for x in distance_vector[rcv_neighbour] if (x[0] != sender and x[2] >=0)]
+
+			if (sender_weight + rcv_weight <= curr_dest_weight):
+				# caso a rota nova seja a menos custosa: INSERE NO INICIO DA LISTA DE ROTAS
+				if not (sender_weight + rcv_weight == curr_dest_weight and distance_vector[rcv_neighbour][0][2] == -1):
+					distance_vector[rcv_neighbour].insert(0, [sender, rcv_weight + sender_weight, 0] )
+
+			else:
+				# caso a rota nova seja mais custosa: INSERE NO FINAL DA LISTA DE ROTAS
+				distance_vector[rcv_neighbour].append([sender, rcv_weight + sender_weight, 0])
 		else:
-			#print(rcv_neighbour, "nao tem")
-			distance_vector[rcv_neighbour] = [ [sender, int(rcv_distance_vector[rcv_neighbour][1]) + distance_vector[sender][0][1] , 0] ]
-		#print("rcv_neighbour", rcv_neighbour,distance_vector[rcv_neighbour]) 
+			distance_vector[rcv_neighbour] = [ [sender, rcv_weight + sender_weight , 0] ]
 
 
 ###############################################################################
 ###############################################################################
 def age_routes():
 	global distance_vector
+	delete_after = []
 	for key in distance_vector:
 		# age every route
 		for route in distance_vector[key]:
@@ -242,6 +266,11 @@ def age_routes():
 				route[2] += 1
 		# update feasible paths to only those that have age <= 4
 		distance_vector[key] = [x for x in distance_vector[key] if x[2] <= 4]
+		if len(distance_vector[key]) == 0: 	
+			delete_after.append(key)
+
+	for key in delete_after:
+		del distance_vector[key]
 				
 
 
@@ -253,11 +282,15 @@ def should_update_vector():
 		if(thread_kill):
 			break
 		if(time.time() - start >= TIME_TO_WAIT): 
-			with lock:
-				send_update_message()
-				#print("eieieie")	
-				age_routes()			
-				start = time.time()
+			start = time.time()
+
+			lock.acquire()
+			send_update_message()
+			lock.release()
+
+			lock.acquire()
+			age_routes()			
+			lock.release()
 	#print("termina")
 
 
@@ -283,7 +316,6 @@ def receive_message():
 ###############################################################################
 ###############################################################################
 if __name__ == "__main__":
-	global thread_kill
 
 	# execute commands from input file
 	if len(args) == 4:
@@ -297,6 +329,7 @@ if __name__ == "__main__":
 	thread_listen.start()
 	thread_update.start()
 
+	global thread_kill
 	while True:
 		# shows the most recently used distance vector
 		print("Atual vetor de distancias:\n", json.dumps(get_mininum_dist_vector()))
