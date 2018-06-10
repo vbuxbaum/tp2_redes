@@ -9,7 +9,6 @@ import struct
 import codecs
 import threading
 
-#  list index out of bound 250 ~
 #./router.py <ADDR> <PERIOD> [STARTUP]
 ###############################################################################
 ###############################################################################
@@ -62,9 +61,13 @@ def resolve_cmd_str(cmd):
 	elif cmd[0] == "del": 			# remove cmd[1] from distance_vector
 		try:
 			lock.acquire()
+			#print("lock resolve_cmd_str acquired")
+
 			linked.remove(cmd[1])
 			del_connection(cmd[1])
 			lock.release()
+			#print("lock resolve_cmd_str released")
+
 		except KeyError:
 			print("\n > > > ConexÃ£o inexistente . . .\n")
 		return 1
@@ -110,9 +113,10 @@ def resolve_rcv_json(data):
 			return messageJ
 	elif messageJ['type'] == "update" :
 		#print("rcv UPDATE")
-		lock.acquire()
+		#print("lock resolve_rcv_json acquired")
 		update_distance_vector(messageJ['distances'], messageJ['source'])
-		lock.release()	
+		#print("lock resolve_rcv_json released")
+	
 	else:
 		print("MSG MAL FORMATADA")
 
@@ -155,7 +159,9 @@ def get_mininum_dist_vector():
 	global distance_vector
 	new_distance_vector = {}
 	for key in distance_vector: # get all neighbours
+		#print(key,distance_vector[key])
 		new_distance_vector[key] = distance_vector[key][0][0:2]
+		#print("distance_vector[key][0][0:3]", distance_vector[key][0])
 	return new_distance_vector
 
 
@@ -209,7 +215,7 @@ def send_via_udp(msg_to_send):
 # Send an update Json message to each neighbour 
 def send_update_message():
 	global linked, distance_vector
-	print (distance_vector)
+	#print (distance_vector)
 	
 	for key in linked:	
 		# distance_vector of A: [A, B, C]. When A sends update message to B, new_distance_vector of A:[C]
@@ -230,28 +236,38 @@ def update_distance_vector(rcv_distance_vector, sender):
 	global distance_vector
 
 	rcv_distance_vector = ast.literal_eval(rcv_distance_vector)
-
 	sender_weight = distance_vector[sender][0][1]
+	#print("sender_weight",sender_weight)
 
 	for rcv_neighbour in rcv_distance_vector:
 
 		rcv_weight = int(rcv_distance_vector[rcv_neighbour][1])
+		#print("rcv_weight",rcv_weight)
 
 		if(rcv_neighbour in distance_vector ):
+			#print("a")
+
 			# caso já haja rotas para o destino: CONFERE SE NOVA ROTA É MELHOR
 			curr_dest_weight =  distance_vector[rcv_neighbour][0][1]
-			distance_vector[rcv_neighbour] = [x for x in distance_vector[rcv_neighbour] if (x[0] != sender and x[2] >=0)]
+			#print("b")
 
+			distance_vector[rcv_neighbour] = [x for x in distance_vector[rcv_neighbour] if (x[0] != sender and x[2] >=0)]
+			#print("c")
 			if (sender_weight + rcv_weight <= curr_dest_weight):
+				#print("d")
 				# caso a rota nova seja a menos custosa: INSERE NO INICIO DA LISTA DE ROTAS
 				if not (sender_weight + rcv_weight == curr_dest_weight and distance_vector[rcv_neighbour][0][2] == -1):
+					#print("e")
 					distance_vector[rcv_neighbour].insert(0, [sender, rcv_weight + sender_weight, 0] )
 
 			else:
 				# caso a rota nova seja mais custosa: INSERE NO FINAL DA LISTA DE ROTAS
+				#print("f")
 				distance_vector[rcv_neighbour].append([sender, rcv_weight + sender_weight, 0])
 		else:
+			#print("g")
 			distance_vector[rcv_neighbour] = [ [sender, rcv_weight + sender_weight , 0] ]
+	#print("h")
 
 
 ###############################################################################
@@ -279,18 +295,17 @@ def age_routes():
 def should_update_vector():
 	global start
 	while (True):
-		if(thread_kill):
-			break
 		if(time.time() - start >= TIME_TO_WAIT): 
 			start = time.time()
 
-			lock.acquire()
+			#print("lock should_update_vector acquired")
 			send_update_message()
-			lock.release()
-
 			lock.acquire()
 			age_routes()			
 			lock.release()
+			#print("lock should_update_vector released")
+		elif(thread_kill):
+			break
 	#print("termina")
 
 
